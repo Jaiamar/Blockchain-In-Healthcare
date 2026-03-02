@@ -7,13 +7,29 @@ export default function Register() {
     const [role, setRole] = useState('patient');
     const [name, setName] = useState('');
     const [id, setId] = useState(`USR-${Math.floor(Math.random() * 10000)}`);
-    const { login } = useAuth();
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    const { register } = useAuth();
     const navigate = useNavigate();
 
-    const handleRegister = (e) => {
+    const handleRegister = async (e) => {
         e.preventDefault();
-        login(role, id);
-        navigate(`/dashboard/${role}`);
+        setError(null);
+        setLoading(true);
+        try {
+            // Generate a deterministic email if one isn't provided (for backwards compatibility/demo purposes)
+            // But prefer explicit email for real Firebase Auth
+            const registerEmail = email || `${id.toLowerCase()}@healthchain.local`;
+            await register(registerEmail, password, role, name, id);
+            navigate(`/dashboard/${role}`);
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -25,8 +41,13 @@ export default function Register() {
                     <p style={{ color: 'var(--text-secondary)' }}>Register your identity on the healthcare blockchain</p>
                 </div>
 
-                <form onSubmit={handleRegister} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                {error && (
+                    <div style={{ backgroundColor: 'rgba(255, 0, 0, 0.1)', border: '1px solid red', color: 'red', padding: '1rem', borderRadius: 'var(--radius-sm)', marginBottom: '1rem' }}>
+                        {error}
+                    </div>
+                )}
 
+                <form onSubmit={handleRegister} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                     <div>
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500, fontSize: '0.875rem' }}>Node Type (Role)</label>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
@@ -57,16 +78,21 @@ export default function Register() {
                     </div>
 
                     <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500, fontSize: '0.875rem' }}>Create Private Key Path</label>
-                        <input type="password" required placeholder="••••••••" style={{ width: '100%', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', color: 'white', outline: 'none' }} onFocus={(e) => e.target.style.borderColor = 'var(--primary-color)'} onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'} />
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500, fontSize: '0.875rem' }}>Email Address</label>
+                        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="satoshi@healthchain.network" style={{ width: '100%', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', color: 'white', outline: 'none' }} onFocus={(e) => e.target.style.borderColor = 'var(--primary-color)'} onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'} />
+                    </div>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500, fontSize: '0.875rem' }}>Create Private Key Path (Password)</label>
+                        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" style={{ width: '100%', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', color: 'white', outline: 'none' }} onFocus={(e) => e.target.style.borderColor = 'var(--primary-color)'} onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'} />
                     </div>
 
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'rgba(0, 242, 254, 0.05)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(0, 242, 254, 0.1)' }}>
                         <strong>Security Notice:</strong> Your private key path is crucial. If lost, you will not be able to recover your account or revoke node access for future data encryption.
                     </div>
 
-                    <button type="submit" className="btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
-                        Initialize & Register
+                    <button type="submit" disabled={loading} className="btn-primary" style={{ width: '100%', marginTop: '0.5rem', opacity: loading ? 0.7 : 1 }}>
+                        {loading ? 'Initializing Node...' : 'Initialize & Register'}
                     </button>
 
                     <div style={{ textAlign: 'center', marginTop: '1rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>

@@ -20,6 +20,7 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
 };
 
 export default function App() {
+  console.log("App component is rendering.");
   return (
     <AuthProvider>
       <Router>

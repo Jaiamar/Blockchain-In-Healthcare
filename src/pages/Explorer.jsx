@@ -1,23 +1,38 @@
 import React, { useState } from 'react';
 import { Activity, Database, Lock, Unlock, Hash, ChevronRight, CheckCircle, Cpu } from 'lucide-react';
 
-const BLOCKS = [
-    { height: 849312, hash: '0x8f2a...9b1c', age: '2 mins ago', miner: 'Node-Hospital-Alpha', txCount: 12, type: 'public', status: 'verified' },
-    { height: 849311, hash: '0x2c4e...7a5f', age: '14 mins ago', miner: 'Node-Clinic-Beta', txCount: 4, type: 'private', status: 'verified' },
-    { height: 849310, hash: '0x5d9b...3e8d', age: '1 hour ago', miner: 'Node-Hospital-Alpha', txCount: 28, type: 'public', status: 'verified' },
-    { height: 849309, hash: '0x1a7f...2c4b', age: '2 hours ago', miner: 'Node-Network-Core', txCount: 156, type: 'public', status: 'verified' },
-    { height: 849308, hash: '0x9e8d...5f1a', age: '3 hours ago', miner: 'Node-Lab-Gamma', txCount: 8, type: 'private', status: 'verified' },
-];
+import { collection, query, getDocs, orderBy, limit } from 'firebase/firestore';
+import { db } from '../firebase';
 
-const TRANSACTIONS = [
-    { id: '0x7b2f...81c9', title: 'Data Encryption Smart Contract', from: 'DOC-102', to: 'Contract-A8B2', value: '1.24 MB', fee: '0.00012 GAS', type: 'write' },
-    { id: '0x3c9e...4a1f', title: 'Access Grant Authorization', from: 'USR-892', to: 'DOC-205', value: 'Permission Token', fee: '0.00005 GAS', type: 'auth' },
-    { id: '0x1f8d...9b4c', title: 'Decryption Key Request', from: 'DOC-205', to: 'Contract-A8B2', value: 'Request Payload', fee: '0.00008 GAS', type: 'request' },
-    { id: '0x5a2b...7c8d', title: 'Node Registration', from: 'HOSP-CITY', to: 'Network-Registry', value: 'Identity Proof', fee: '0.00100 GAS', type: 'admin' },
-];
+// Removed hardcoded BLOCKS and TRANSACTIONS data
 
 export default function Explorer() {
     const [chainType, setChainType] = useState('all');
+    const [blocks, setBlocks] = useState([]);
+    const [transactions, setTransactions] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    React.useEffect(() => {
+        const fetchExplorerData = async () => {
+            try {
+                // Fetch recent blocks
+                const blocksQ = query(collection(db, 'blocks'), orderBy('height', 'desc'), limit(10));
+                const blocksSnap = await getDocs(blocksQ);
+                setBlocks(blocksSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+                // Fetch recent transactions
+                const txsQ = query(collection(db, 'transactions'), limit(10));
+                const txsSnap = await getDocs(txsQ);
+                setTransactions(txsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+            } catch (error) {
+                console.error("Error fetching explorer data:", error);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchExplorerData();
+    }, []);
 
     return (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
@@ -84,28 +99,34 @@ export default function Explorer() {
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        {BLOCKS.filter(b => chainType === 'all' || b.type === chainType).map(b => (
-                            <div key={b.height} style={{ display: 'flex', alignItems: 'center', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)', gap: '1.5rem' }}>
-                                <div style={{ background: 'rgba(255,255,255,0.1)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                                    <Database size={20} color="var(--text-secondary)" />
-                                </div>
-                                <div style={{ flex: 1 }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                                        <span style={{ color: 'var(--primary-color)', fontWeight: 600 }}>#{b.height}</span>
-                                        <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>{b.age}</span>
+                        {blocks.filter(b => chainType === 'all' || b.type === chainType).length > 0 ? (
+                            blocks.filter(b => chainType === 'all' || b.type === chainType).map(b => (
+                                <div key={b.height || b.id} style={{ display: 'flex', alignItems: 'center', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)', gap: '1.5rem' }}>
+                                    <div style={{ background: 'rgba(255,255,255,0.1)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                                        <Database size={20} color="var(--text-secondary)" />
                                     </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <div style={{ fontSize: '0.875rem', display: 'flex', gap: '1rem' }}>
-                                            <span>Miner: {b.miner}</span>
-                                            <span style={{ color: 'var(--text-secondary)' }}>{b.txCount} txns</span>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                                            <span style={{ color: 'var(--primary-color)', fontWeight: 600 }}>#{b.height}</span>
+                                            <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>{b.age}</span>
                                         </div>
-                                        <span className={b.type === 'public' ? 'status-badge verified' : 'status-badge pending'} style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}>
-                                            {b.type === 'public' ? 'Public Chain' : 'Private Chain'}
-                                        </span>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <div style={{ fontSize: '0.875rem', display: 'flex', gap: '1rem' }}>
+                                                <span>Miner: {b.miner}</span>
+                                                <span style={{ color: 'var(--text-secondary)' }}>{b.txCount} txns</span>
+                                            </div>
+                                            <span className={b.type === 'public' ? 'status-badge verified' : 'status-badge pending'} style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}>
+                                                {b.type === 'public' ? 'Public Chain' : 'Private Chain'}
+                                            </span>
+                                        </div>
                                     </div>
                                 </div>
+                            ))
+                        ) : (
+                            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-md)' }}>
+                                No blocks found on the network.
                             </div>
-                        ))}
+                        )}
                     </div>
                     <button className="btn-secondary" style={{ width: '100%', marginTop: '1.5rem', padding: '0.75rem' }}>View All Blocks</button>
                 </div>
@@ -115,28 +136,34 @@ export default function Explorer() {
                     <h2 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1.5rem' }}>Latest Transactions</h2>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        {TRANSACTIONS.map(tx => (
-                            <div key={tx.id} style={{ display: 'flex', alignItems: 'flex-start', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)', gap: '1.5rem' }}>
-                                <div style={{ background: 'rgba(255,255,255,0.1)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                                    <Hash size={20} color="var(--text-secondary)" />
+                        {transactions.length > 0 ? (
+                            transactions.map(tx => (
+                                <div key={tx.id} style={{ display: 'flex', alignItems: 'flex-start', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)', gap: '1.5rem' }}>
+                                    <div style={{ background: 'rgba(255,255,255,0.1)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                                        <Hash size={20} color="var(--text-secondary)" />
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                                            <span style={{ fontWeight: 600 }}>{tx.title}</span>
+                                            <span style={{ fontFamily: 'monospace', color: 'var(--primary-color)', fontSize: '0.875rem' }}>{tx.id}</span>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                                            <span style={{ background: 'rgba(0,0,0,0.3)', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>{tx.from}</span>
+                                            <ChevronRight size={14} />
+                                            <span style={{ background: 'rgba(0,0,0,0.3)', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>{tx.to}</span>
+                                        </div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
+                                            <span style={{ color: 'var(--success)' }}>Payload: {tx.value}</span>
+                                            <span>Fee: {tx.fee}</span>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div style={{ flex: 1 }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                                        <span style={{ fontWeight: 600 }}>{tx.title}</span>
-                                        <span style={{ fontFamily: 'monospace', color: 'var(--primary-color)', fontSize: '0.875rem' }}>{tx.id}</span>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                                        <span style={{ background: 'rgba(0,0,0,0.3)', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>{tx.from}</span>
-                                        <ChevronRight size={14} />
-                                        <span style={{ background: 'rgba(0,0,0,0.3)', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>{tx.to}</span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
-                                        <span style={{ color: 'var(--success)' }}>Payload: {tx.value}</span>
-                                        <span>Fee: {tx.fee}</span>
-                                    </div>
-                                </div>
+                            ))
+                        ) : (
+                            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.02)', borderRadius: 'var(--radius-md)' }}>
+                                No transactions found on the network.
                             </div>
-                        ))}
+                        )}
                     </div>
                     <button className="btn-secondary" style={{ width: '100%', marginTop: '1.5rem', padding: '0.75rem' }}>View All Transactions</button>
                 </div>

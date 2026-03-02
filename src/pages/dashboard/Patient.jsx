@@ -2,30 +2,43 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Check, Shield, X, AlertTriangle, FileText, Activity, ShieldAlert, Cpu } from 'lucide-react';
 
-// Simulated DB / Blockchain Records
-const INITIAL_RECORDS = [
-    { id: 'REC-8921', date: '2023-10-15', type: 'Blood Test', doctor: 'Dr. Sarah Smith', facility: 'City General', hash: '0x8f2a...9b1c' },
-    { id: 'REC-9034', date: '2023-11-02', type: 'MRI Scan', doctor: 'Dr. James Wilson', facility: 'Metro Imaging', hash: '0x2c4e...7a5f' },
-    { id: 'REC-9102', date: '2023-12-20', type: 'General Checkup', doctor: 'Dr. Sarah Smith', facility: 'City General', hash: '0x5d9b...3e8d' }
-];
-
-const INITIAL_REQUESTS = [
-    { doctorId: 'DOC-102', name: 'Dr. Sarah Smith', role: 'General Practitioner', status: 'granted' },
-    { doctorId: 'DOC-205', name: 'Dr. James Wilson', role: 'Radiologist', status: 'pending' },
-];
-
-const INITIAL_LOGS = [
-    { id: 'TX-1189', time: '2 mins ago', action: 'Data Request', actor: 'DOC-205', status: 'pending' },
-    { id: 'TX-1188', time: '1 week ago', action: 'Record Added', actor: 'DOC-102', status: 'verified' },
-    { id: 'TX-1187', time: '2 weeks ago', action: 'Access Granted', actor: 'Patient', status: 'verified' },
-];
+// Removed mock data as requested
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../../firebase';
 
 export default function PatientDashboard() {
     const { user } = useAuth();
-    const [records] = useState(INITIAL_RECORDS);
-    const [requests, setRequests] = useState(INITIAL_REQUESTS);
-    const [logs] = useState(INITIAL_LOGS);
+    const [records, setRecords] = useState([]);
+    const [requests, setRequests] = useState([]);
+    const [logs, setLogs] = useState([]);
     const [emergencyAccess, setEmergencyAccess] = useState(false);
+    const [loading, setLoading] = useState(true);
+
+    React.useEffect(() => {
+        const fetchUserData = async () => {
+            if (!user) return;
+            try {
+                // Fetch real records specific to the logged-in user
+                const recordsQ = query(collection(db, 'records'), where('patientId', '==', user.uid));
+                const recordsQuerySnapshot = await getDocs(recordsQ);
+                setRecords(recordsQuerySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+                const requestsQ = query(collection(db, 'requests'), where('patientId', '==', user.uid));
+                const requestsQuerySnapshot = await getDocs(requestsQ);
+                setRequests(requestsQuerySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+                const logsQ = query(collection(db, 'logs'), where('patientId', '==', user.uid));
+                const logsQuerySnapshot = await getDocs(logsQ);
+                setLogs(logsQuerySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+            } catch (error) {
+                console.error("Error fetching user data:", error);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchUserData();
+    }, [user]);
 
     const handleGrant = (doctorId) => {
         setRequests(requests.map(req => req.doctorId === doctorId ? { ...req, status: 'granted' } : req));

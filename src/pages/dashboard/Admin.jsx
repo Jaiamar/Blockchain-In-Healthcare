@@ -2,11 +2,10 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Building, Users, Activity, CheckCircle, AlertOctagon, Terminal, Server } from 'lucide-react';
 
-const DOCTORS = [
-    { id: 'DOC-102', name: 'Dr. Sarah Smith', department: 'General Practice', status: 'active', joined: '2022-01-15' },
-    { id: 'DOC-205', name: 'Dr. James Wilson', department: 'Radiology', status: 'active', joined: '2023-05-20' },
-    { id: 'DOC-491', name: 'Dr. Emily Chen', department: 'Cardiology', status: 'inactive', joined: '2021-11-10' },
-];
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../../firebase';
+
+// Removed hardcoded DOCTORS data
 
 const BLOCKCHAIN_EVENTS = [
     { id: 'BLK-88219', type: 'Node Joined', details: 'DOC-992 Registered to Hospital Node', time: '10 mins ago', status: 'success' },
@@ -17,7 +16,30 @@ const BLOCKCHAIN_EVENTS = [
 
 export default function AdminDashboard() {
     const { user } = useAuth();
-    const [doctors, setDoctors] = useState(DOCTORS);
+    const [doctors, setDoctors] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    React.useEffect(() => {
+        const fetchDoctors = async () => {
+            try {
+                const doctorsQ = query(collection(db, 'users'), where('role', '==', 'doctor'));
+                const querySnapshot = await getDocs(doctorsQ);
+                const fetchedDoctors = querySnapshot.docs.map(doc => ({
+                    uid: doc.id,
+                    ...doc.data(),
+                    status: 'active', // Default to active for demo purposes
+                    department: 'General' // Default department
+                }));
+                setDoctors(fetchedDoctors);
+            } catch (error) {
+                console.error("Error fetching doctors:", error);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchDoctors();
+    }, []);
 
     return (
         <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
@@ -90,23 +112,31 @@ export default function AdminDashboard() {
                             </tr>
                         </thead>
                         <tbody>
-                            {doctors.map(d => (
-                                <tr key={d.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                    <td style={{ padding: '1rem 0', fontWeight: 500 }}>{d.name}</td>
-                                    <td style={{ padding: '1rem 0', fontFamily: 'monospace', color: 'var(--primary-color)' }}>{d.id}</td>
-                                    <td style={{ padding: '1rem 0', color: 'var(--text-secondary)' }}>{d.department}</td>
-                                    <td style={{ padding: '1rem 0' }}>
-                                        {d.status === 'active' ? (
-                                            <span className="status-badge verified">Active</span>
-                                        ) : (
-                                            <span className="status-badge pending" style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>Inactive</span>
-                                        )}
-                                    </td>
-                                    <td style={{ padding: '1rem 0', textAlign: 'right' }}>
-                                        <button style={{ color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.5rem', hover: { color: 'white' } }}>Manage</button>
+                            {doctors.length > 0 ? (
+                                doctors.map(d => (
+                                    <tr key={d.uid} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                        <td style={{ padding: '1rem 0', fontWeight: 500 }}>{d.name}</td>
+                                        <td style={{ padding: '1rem 0', fontFamily: 'monospace', color: 'var(--primary-color)' }}>{d.id}</td>
+                                        <td style={{ padding: '1rem 0', color: 'var(--text-secondary)' }}>{d.department}</td>
+                                        <td style={{ padding: '1rem 0' }}>
+                                            {d.status === 'active' ? (
+                                                <span className="status-badge verified">Active</span>
+                                            ) : (
+                                                <span className="status-badge pending" style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>Inactive</span>
+                                            )}
+                                        </td>
+                                        <td style={{ padding: '1rem 0', textAlign: 'right' }}>
+                                            <button style={{ color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.5rem' }}>Manage</button>
+                                        </td>
+                                    </tr>
+                                ))
+                            ) : (
+                                <tr>
+                                    <td colSpan="5" style={{ padding: '1rem 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                        No registered doctors found in the network.
                                     </td>
                                 </tr>
-                            ))}
+                            )}
                         </tbody>
                     </table>
                 </div>

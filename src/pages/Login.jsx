@@ -5,14 +5,26 @@ import { Shield, User, Stethoscope, Building } from 'lucide-react';
 
 export default function Login() {
     const [role, setRole] = useState('patient');
-    const [id, setId] = useState('');
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState(null);
+    const [loading, setLoading] = useState(false);
+
     const { login } = useAuth();
     const navigate = useNavigate();
 
-    const handleLogin = (e) => {
+    const handleLogin = async (e) => {
         e.preventDefault();
-        login(role, id);
-        navigate(`/dashboard/${role}`);
+        setError(null);
+        setLoading(true);
+        try {
+            await login(email, password);
+            navigate(`/dashboard/${role}`);
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -23,6 +35,12 @@ export default function Login() {
                     <h2 style={{ fontSize: '1.75rem', fontWeight: 700 }}>Welcome Back</h2>
                     <p style={{ color: 'var(--text-secondary)' }}>Sign in to continue to HealthChain</p>
                 </div>
+
+                {error && (
+                    <div style={{ backgroundColor: 'rgba(255, 0, 0, 0.1)', border: '1px solid red', color: 'red', padding: '1rem', borderRadius: 'var(--radius-sm)', marginBottom: '1rem' }}>
+                        {error}
+                    </div>
+                )}
 
                 <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
 
@@ -77,12 +95,13 @@ export default function Login() {
                     </div>
 
                     <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500, fontSize: '0.875rem' }}>{role.charAt(0).toUpperCase() + role.slice(1)} ID</label>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500, fontSize: '0.875rem' }}>Email Address</label>
                         <input
-                            type="text"
-                            value={id}
-                            onChange={(e) => setId(e.target.value)}
-                            placeholder={`Enter your ${role} ID`}
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            required
+                            placeholder="satoshi@healthchain.network"
                             style={{
                                 width: '100%',
                                 padding: '0.75rem 1rem',
@@ -99,9 +118,12 @@ export default function Login() {
                     </div>
 
                     <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500, fontSize: '0.875rem' }}>Password / Private Key (Optional)</label>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500, fontSize: '0.875rem' }}>Password / Private Key Path</label>
                         <input
                             type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            required
                             placeholder="••••••••"
                             style={{
                                 width: '100%',
@@ -118,8 +140,8 @@ export default function Login() {
                         />
                     </div>
 
-                    <button type="submit" className="btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
-                        Login to Network
+                    <button type="submit" disabled={loading} className="btn-primary" style={{ width: '100%', marginTop: '0.5rem', opacity: loading ? 0.7 : 1 }}>
+                        {loading ? 'Authenticating Node...' : 'Login to Network'}
                     </button>
 
                     <div style={{ textAlign: 'center', marginTop: '1rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
