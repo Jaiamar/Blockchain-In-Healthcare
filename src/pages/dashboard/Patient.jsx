@@ -3,7 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { Check, Shield, X, AlertTriangle, FileText, Activity, ShieldAlert, Cpu } from 'lucide-react';
 
 // Removed mock data as requested
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../firebase';
 
 export default function PatientDashboard() {
@@ -19,17 +19,24 @@ export default function PatientDashboard() {
             if (!user) return;
             try {
                 // Fetch real records specific to the logged-in user
-                const recordsQ = query(collection(db, 'records'), where('patientId', '==', user.uid));
+                const recordsQ = query(collection(db, 'records'), where('patientId', '==', user.id));
                 const recordsQuerySnapshot = await getDocs(recordsQ);
                 setRecords(recordsQuerySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
 
-                const requestsQ = query(collection(db, 'requests'), where('patientId', '==', user.uid));
+                const requestsQ = query(collection(db, 'requests'), where('patientId', '==', user.id));
                 const requestsQuerySnapshot = await getDocs(requestsQ);
                 setRequests(requestsQuerySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
 
-                const logsQ = query(collection(db, 'logs'), where('patientId', '==', user.uid));
+                const logsQ = query(collection(db, 'logs'), where('patientId', '==', user.id));
                 const logsQuerySnapshot = await getDocs(logsQ);
                 setLogs(logsQuerySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+                console.log("Patient Loaded Docs:", {
+                    uid: user.uid,
+                    id: user.id,
+                    recordsCount: recordsQuerySnapshot.empty ? 0 : recordsQuerySnapshot.size,
+                    reqsCount: requestsQuerySnapshot.empty ? 0 : requestsQuerySnapshot.size
+                });
             } catch (error) {
                 console.error("Error fetching user data:", error);
             } finally {
@@ -40,12 +47,28 @@ export default function PatientDashboard() {
         fetchUserData();
     }, [user]);
 
-    const handleGrant = (doctorId) => {
-        setRequests(requests.map(req => req.doctorId === doctorId ? { ...req, status: 'granted' } : req));
+    const handleGrant = async (requestId) => {
+        try {
+            await updateDoc(doc(db, 'requests', requestId), {
+                status: 'granted'
+            });
+            setRequests(requests.map(req => req.id === requestId ? { ...req, status: 'granted' } : req));
+        } catch (error) {
+            console.error("Error granting request:", error);
+            alert("Failed to grant request. Check console.");
+        }
     };
 
-    const handleRevoke = (doctorId) => {
-        setRequests(requests.map(req => req.doctorId === doctorId ? { ...req, status: 'revoked' } : req));
+    const handleRevoke = async (requestId) => {
+        try {
+            await updateDoc(doc(db, 'requests', requestId), {
+                status: 'revoked'
+            });
+            setRequests(requests.map(req => req.id === requestId ? { ...req, status: 'revoked' } : req));
+        } catch (error) {
+            console.error("Error revoking request:", error);
+            alert("Failed to revoke request. Check console.");
+        }
     };
 
     return (
@@ -96,13 +119,22 @@ export default function PatientDashboard() {
                                 <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
                                     <div>
                                         <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.25rem' }}>{r.type}</h3>
-                                        <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>{r.date} • {r.facility} • {r.doctor}</p>
+                                        <div style={{ fontSize: '0.95rem', background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255,255,255,0.05)', marginTop: '0.5rem', marginBottom: '0.5rem', wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>
+                                            {r.details || "No additional text content provided."}
+                                        </div>
+                                        <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>{r.date} • {r.facility} • {r.doctorName || r.doctor}</p>
                                     </div>
-                                    <div style={{ textAlign: 'right' }}>
-                                        <div className="status-badge verified" style={{ marginBottom: '0.5rem' }}>
+                                    <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-end' }}>
+                                        <div className="status-badge verified" style={{ marginBottom: '0.25rem' }}>
                                             <Check size={14} /> Verified Block
                                         </div>
-                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>Tx: {r.hash}</div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>Tx: {r.hash?.slice(0, 16)}...</div>
+
+                                        {r.fileUrl && (
+                                            <a href={r.fileUrl} target="_blank" rel="noreferrer" className="btn-primary" style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem', marginTop: '0.25rem', display: 'inline-block' }}>
+                                                View Shared File
+                                            </a>
+                                        )}
                                     </div>
                                 </div>
                             ))}
@@ -115,22 +147,24 @@ export default function PatientDashboard() {
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                             {requests.map(req => (
-                                <div key={req.doctorId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                                <div key={req.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
                                     <div>
-                                        <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.25rem' }}>{req.name}</h3>
-                                        <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>ID: {req.doctorId} • {req.role}</p>
+                                        <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.25rem' }}>{req.doctorName || 'Doctor'}</h3>
+                                        <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                                            ID: {req.doctorId} • {req.type === 'report_request' ? 'Medical Report Request' : 'General Access'}
+                                        </p>
                                     </div>
                                     <div>
                                         {req.status === 'pending' && (
                                             <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                                <button onClick={() => handleGrant(req.doctorId)} style={{ padding: '0.5rem 1rem', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>Grant</button>
-                                                <button onClick={() => handleRevoke(req.doctorId)} style={{ padding: '0.5rem 1rem', background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>Deny</button>
+                                                <button onClick={() => handleGrant(req.id)} style={{ padding: '0.5rem 1rem', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>Accept</button>
+                                                <button onClick={() => handleRevoke(req.id)} style={{ padding: '0.5rem 1rem', background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>Decline</button>
                                             </div>
                                         )}
                                         {req.status === 'granted' && (
                                             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                                                 <span style={{ color: 'var(--success)', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Check size={14} /> Active</span>
-                                                <button onClick={() => handleRevoke(req.doctorId)} style={{ padding: '0.5rem 1rem', background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>Revoke</button>
+                                                <button onClick={() => handleRevoke(req.id)} style={{ padding: '0.5rem 1rem', background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>Revoke</button>
                                             </div>
                                         )}
                                         {req.status === 'revoked' && (
@@ -139,6 +173,9 @@ export default function PatientDashboard() {
                                     </div>
                                 </div>
                             ))}
+                            {requests.length === 0 && (
+                                <div style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '1rem' }}>No incoming requests.</div>
+                            )}
                         </div>
                     </div>
 

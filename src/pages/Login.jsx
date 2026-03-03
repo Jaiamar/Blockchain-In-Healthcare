@@ -4,7 +4,6 @@ import { useAuth } from '../context/AuthContext';
 import { Shield, User, Stethoscope, Building } from 'lucide-react';
 
 export default function Login() {
-    const [role, setRole] = useState('patient');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState(null);
@@ -18,8 +17,8 @@ export default function Login() {
         setError(null);
         setLoading(true);
         try {
-            await login(email, password);
-            navigate(`/dashboard/${role}`);
+            const userData = await login(email, password);
+            navigate(`/dashboard/${userData.role}`);
         } catch (err) {
             setError(err.message);
         } finally {
@@ -43,56 +42,6 @@ export default function Login() {
                 )}
 
                 <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-
-                    <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500, fontSize: '0.875rem' }}>Select Role</label>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
-                            <button
-                                type="button"
-                                onClick={() => setRole('patient')}
-                                style={{
-                                    padding: '0.75rem',
-                                    borderRadius: 'var(--radius-sm)',
-                                    border: `1px solid ${role === 'patient' ? 'var(--primary-color)' : 'var(--border-color)'}`,
-                                    background: role === 'patient' ? 'rgba(0, 242, 254, 0.1)' : 'transparent',
-                                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem'
-                                }}
-                            >
-                                <User size={20} color={role === 'patient' ? 'var(--primary-color)' : 'var(--text-secondary)'} />
-                                <span style={{ fontSize: '0.75rem', color: role === 'patient' ? 'var(--text-primary)' : 'var(--text-secondary)' }}>Patient</span>
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => setRole('doctor')}
-                                style={{
-                                    padding: '0.75rem',
-                                    borderRadius: 'var(--radius-sm)',
-                                    border: `1px solid ${role === 'doctor' ? 'var(--primary-color)' : 'var(--border-color)'}`,
-                                    background: role === 'doctor' ? 'rgba(0, 242, 254, 0.1)' : 'transparent',
-                                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem'
-                                }}
-                            >
-                                <Stethoscope size={20} color={role === 'doctor' ? 'var(--primary-color)' : 'var(--text-secondary)'} />
-                                <span style={{ fontSize: '0.75rem', color: role === 'doctor' ? 'var(--text-primary)' : 'var(--text-secondary)' }}>Doctor</span>
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => setRole('admin')}
-                                style={{
-                                    padding: '0.75rem',
-                                    borderRadius: 'var(--radius-sm)',
-                                    border: `1px solid ${role === 'admin' ? 'var(--primary-color)' : 'var(--border-color)'}`,
-                                    background: role === 'admin' ? 'rgba(0, 242, 254, 0.1)' : 'transparent',
-                                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem'
-                                }}
-                            >
-                                <Building size={20} color={role === 'admin' ? 'var(--primary-color)' : 'var(--text-secondary)'} />
-                                <span style={{ fontSize: '0.75rem', color: role === 'admin' ? 'var(--text-primary)' : 'var(--text-secondary)' }}>Admin</span>
-                            </button>
-                        </div>
-                    </div>
 
                     <div>
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 500, fontSize: '0.875rem' }}>Email Address</label>

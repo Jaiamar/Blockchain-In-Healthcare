@@ -1,19 +1,25 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { Search, FileText, Lock, Unlock, Check, ShieldAlert, Cpu, X } from 'lucide-react';
+import { Search, FileText, Lock, Unlock, Check, ShieldAlert, Cpu, X, Users } from 'lucide-react';
 
-import { collection, query, where, getDocs, addDoc } from 'firebase/firestore';
-import { db } from '../../firebase';
+import { collection, query, where, getDocs, addDoc, doc, updateDoc, setDoc } from 'firebase/firestore';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { db, storage } from '../../firebase';
 
 // Removed hardcoded dummy data for patients and records
 
 export default function DoctorDashboard() {
     const { user } = useAuth();
-    const [patients, setPatients] = useState([]);
+    const [patients, setPatients] = useState([]); // This stores permitted patients
+    const [allNetworkPatients, setAllNetworkPatients] = useState([]); // All patients
     const [searchId, setSearchId] = useState('');
     const [activePatient, setActivePatient] = useState(null);
     const [isSearching, setIsSearching] = useState(false);
     const [patientRecords, setPatientRecords] = useState([]);
+
+    // Upload State
+    const [uploadingFile, setUploadingFile] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
 
     const [searchedPatient, setSearchedPatient] = useState(null);
 
@@ -28,21 +34,49 @@ export default function DoctorDashboard() {
             if (!user) return;
             try {
                 // Fetch permissions granted to this doctor
-                const reqsQ = query(collection(db, 'requests'), where('doctorId', '==', user.uid), where('status', '==', 'granted'));
+                const reqsQ = query(collection(db, 'requests'), where('doctorId', '==', user.id), where('status', '==', 'granted'));
                 const reqsSnap = await getDocs(reqsQ);
 
                 const grantedPatients = [];
                 for (const docSnap of reqsSnap.docs) {
                     const reqData = docSnap.data();
-                    // Assuming we have patient name stored, or we could fetch user doc
-                    grantedPatients.push({ id: reqData.patientId, name: reqData.patientName || 'Patient', status: 'granted' });
+                    let pName = reqData.patientName;
+
+                    if (!pName) {
+                        try {
+                            const pDoc = await getDocs(query(collection(db, 'users'), where('id', '==', reqData.patientId)));
+                            if (!pDoc.empty) {
+                                pName = pDoc.docs[0].data().name;
+                                // Ideally update the request entry as well
+                                await updateDoc(doc(db, 'requests', docSnap.id), { patientName: pName });
+                            } else {
+                                pName = 'Patient';
+                            }
+                        } catch (err) {
+                            pName = 'Patient';
+                        }
+                    }
+
+                    grantedPatients.push({ id: reqData.patientId, name: pName, status: 'granted' });
                 }
+                console.log("Granted Patients Loaded:", grantedPatients);
                 setPatients(grantedPatients);
             } catch (error) {
                 console.error("Error fetching patients:", error);
             }
         };
         fetchPatients();
+
+        // Also fetch ALL network patients for discovery directory
+        const fetchNetworkPatients = async () => {
+            try {
+                const querySnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'patient')));
+                const foundList = querySnap.docs.map(doc => ({ ...doc.data(), docRefId: doc.id }));
+                console.log("ALL NETWORK PATIENTS LOADED:", foundList);
+                setAllNetworkPatients(foundList);
+            } catch (e) { console.error(e) }
+        };
+        fetchNetworkPatients();
     }, [user]);
 
     React.useEffect(() => {
@@ -99,131 +133,316 @@ export default function DoctorDashboard() {
         }
     };
 
-    const handleSearch = (e) => {
+    const handleSearch = async (e) => {
         e.preventDefault();
         setIsSearching(true);
-        // Simulate network delay
-        setTimeout(() => {
+        try {
             const existing = patients.find(p => p.id === searchId);
             if (existing) {
                 setSearchedPatient(existing);
             } else {
-                setSearchedPatient({ id: searchId, name: 'Unknown Patient', status: 'none' });
+                // Fetch real patient from db
+                const pQuery = query(collection(db, 'users'), where('id', '==', searchId), where('role', '==', 'patient'));
+                const pSnap = await getDocs(pQuery);
+                if (!pSnap.empty) {
+                    const pData = pSnap.docs[0].data();
+                    setSearchedPatient({ id: searchId, name: pData.name, status: 'none', docRefId: pSnap.docs[0].id });
+                } else {
+                    setSearchedPatient({ id: searchId, name: 'Unknown Patient (Not Found)', status: 'none' });
+                }
             }
+        } catch (err) {
+            console.error(err);
+        } finally {
             setIsSearching(false);
-        }, 800);
+        }
     };
 
-    const handleRequestAccess = () => {
-        setSearchedPatient({ ...searchedPatient, status: 'pending' });
+    const handleRequestAccess = async (patientTarget = searchedPatient) => {
+        try {
+            const reqDocId = `${user.id}_${patientTarget.id}`;
+            await setDoc(doc(db, 'requests', reqDocId), {
+                doctorId: user.id,
+                doctorName: user.name,
+                patientId: patientTarget.id,
+                patientName: patientTarget.name,
+                status: 'pending',
+                type: 'report_request'
+            });
+            if (searchedPatient && patientTarget.id === searchedPatient.id) {
+                setSearchedPatient({ ...searchedPatient, status: 'pending' });
+            }
+            alert(`Access request sent to ${patientTarget.name}!`);
+        } catch (error) {
+            console.error("Error requesting access:", error);
+            alert("Failed to request access. See console.");
+        }
+    };
+
+    const handleFileUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file || !activePatient) return;
+
+        setUploadingFile('main');
+        setUploadProgress(10); // Start progress slightly
+
+        try {
+            const fileRef = ref(storage, `shared_files/${activePatient.id}/${user.id}/${file.name}`);
+            const uploadTask = uploadBytesResumable(fileRef, file);
+
+            uploadTask.on('state_changed',
+                (snapshot) => {
+                    const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                    setUploadProgress(Math.round(progress));
+                },
+                (err) => {
+                    console.error("Upload error stream:", err);
+                    setUploadingFile(false);
+                    setUploadProgress(0);
+                }
+            );
+
+            await uploadTask;
+            const downloadURL = await getDownloadURL(fileRef);
+
+            const fakeHash = '0x' + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+            const newRecord = {
+                patientId: activePatient.id,
+                doctorId: user.id,
+                doctorName: user.name,
+                type: 'Shared File: ' + file.name,
+                details: file.name,
+                fileUrl: downloadURL,
+                date: new Date().toISOString().split('T')[0],
+                hash: fakeHash,
+                verified: true
+            };
+
+            const docRef = await addDoc(collection(db, 'records'), newRecord);
+            setPatientRecords([{ id: docRef.id, ...newRecord }, ...patientRecords]);
+        } catch (error) {
+            console.error("File upload failed:", error);
+            alert("File upload failed. See console.");
+        } finally {
+            setUploadingFile(false);
+            setUploadProgress(0);
+            e.target.value = null; // reset input
+        }
+    };
+
+    const handleQuickUpload = async (e, targetPatient) => {
+        const file = e.target.files[0];
+        if (!file || !targetPatient) return;
+
+        setUploadingFile(targetPatient.id);
+        setUploadProgress(10);
+        try {
+            const fileRef = ref(storage, `shared_files/${targetPatient.id}/${user.id}/${file.name}`);
+            const uploadTask = uploadBytesResumable(fileRef, file);
+
+            uploadTask.on('state_changed',
+                (snapshot) => setUploadProgress(Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100)),
+                (err) => console.error(err)
+            );
+
+            await uploadTask;
+            const downloadURL = await getDownloadURL(fileRef);
+
+            const fakeHash = '0x' + Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+            const newRecord = {
+                patientId: targetPatient.id,
+                doctorId: user.id,
+                doctorName: user.name,
+                type: 'Shared File: ' + file.name,
+                details: file.name,
+                fileUrl: downloadURL,
+                date: new Date().toISOString().split('T')[0],
+                hash: fakeHash,
+                verified: true
+            };
+
+            const docRef = await addDoc(collection(db, 'records'), newRecord);
+            if (activePatient && activePatient.id === targetPatient.id) {
+                setPatientRecords(prev => [{ id: docRef.id, ...newRecord }, ...prev]);
+            }
+            alert(`File successfully sent to ${targetPatient.name}`);
+        } catch (error) {
+            console.error("File upload failed:", error);
+            alert("File upload failed. See console.");
+        } finally {
+            setUploadingFile(false);
+            setUploadProgress(0);
+            e.target.value = null;
+        }
     };
 
     return (
-        <div className="animate-fade-in" style={{ display: 'grid', gridTemplateColumns: '1fr 2.5fr', gap: '2rem' }}>
+        <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
 
-            {/* Left Sidebar - Patients List */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-
-                {/* Profile Summary */}
-                <div className="glass-panel" style={{ padding: '1.5rem', textAlign: 'center' }}>
-                    <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'var(--primary-gradient)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 700, margin: '0 auto 1rem auto' }}>
+            {/* Top Bar - Profile & Overview */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
+                <div className="glass-panel" style={{ padding: '2rem', display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+                    <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'var(--primary-gradient)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem', fontWeight: 700 }}>
                         {user?.name.charAt(0)}
                     </div>
-                    <h2 style={{ fontSize: '1.25rem', fontWeight: 600 }}>{user?.name}</h2>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.5rem' }}>{user?.id}</p>
-                    <div className="status-badge verified" style={{ fontSize: '0.75rem' }}>Verified Practitioner</div>
+                    <div>
+                        <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.25rem' }}>{user?.name}</h2>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '1rem', marginBottom: '0.5rem' }}>{user?.id}</p>
+                        <div className="status-badge verified" style={{ fontSize: '0.75rem', display: 'inline-flex' }}>Verified Practitioner</div>
+                    </div>
                 </div>
 
                 {/* Search */}
-                <div className="glass-panel" style={{ padding: '1.5rem' }}>
-                    <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem' }}>Search Network</h3>
-                    <form onSubmit={handleSearch} style={{ display: 'flex', gap: '0.5rem' }}>
+                <div className="glass-panel" style={{ padding: '2rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                    <h3 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '1rem' }}>Patient Search Network</h3>
+                    <form onSubmit={handleSearch} style={{ display: 'flex', gap: '0.75rem' }}>
                         <input
                             type="text"
                             placeholder="Patient ID (e.g. USR-892)"
                             value={searchId}
                             onChange={(e) => setSearchId(e.target.value)}
-                            style={{ flex: 1, padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', color: 'white', outline: 'none' }}
+                            style={{ flex: 1, padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', color: 'white', outline: 'none' }}
                             required
                         />
-                        <button type="submit" className="btn-primary" style={{ padding: '0.5rem', minWidth: '40px' }}>
-                            <Search size={18} />
+                        <button type="submit" className="btn-primary" style={{ padding: '0.75rem 1.5rem' }}>
+                            <Search size={20} />
                         </button>
                     </form>
 
                     {searchedPatient && (
-                        <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                            <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Result for {searchedPatient.id}</div>
-                            <div style={{ fontWeight: 600, margin: '0.25rem 0 0.75rem 0' }}>{searchedPatient.name}</div>
+                        <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Result for {searchedPatient.id}</div>
+                                <div style={{ fontWeight: 600, fontSize: '1.125rem' }}>{searchedPatient.name}</div>
+                            </div>
 
                             {searchedPatient.status === 'none' && (
-                                <button onClick={handleRequestAccess} className="btn-primary" style={{ width: '100%', fontSize: '0.875rem', padding: '0.5rem' }}>
-                                    Request Access Block
+                                <button onClick={() => handleRequestAccess()} className="btn-primary" style={{ fontSize: '0.875rem', padding: '0.5rem 1rem' }}>
+                                    Request Access
                                 </button>
                             )}
                             {searchedPatient.status === 'pending' && (
-                                <div className="status-badge pending" style={{ width: '100%', justifyContent: 'center' }}>
-                                    Smart Contract Pending
+                                <div className="status-badge pending">
+                                    Pending Approval
                                 </div>
                             )}
                             {searchedPatient.status === 'granted' && (
-                                <button onClick={() => setActivePatient(searchedPatient)} className="btn-secondary" style={{ width: '100%', fontSize: '0.875rem', padding: '0.5rem' }}>
-                                    View Decrypted Records
+                                <button onClick={() => setActivePatient(searchedPatient)} className="btn-secondary" style={{ fontSize: '0.875rem', padding: '0.5rem 1rem' }}>
+                                    View Records
                                 </button>
                             )}
                         </div>
                     )}
                 </div>
+            </div>
+
+            {/* Middle Section - Directories */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '2rem' }}>
+
+                {/* All Network Patients Directory */}
+                <div className="glass-panel" style={{ padding: '1.5rem', maxHeight: '350px', overflowY: 'auto' }}>
+                    <h3 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Users size={18} color="var(--primary-color)" /> Network Patients Directory
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        {allNetworkPatients.map(netP => {
+                            const isGranted = patients.some(p => p.id === netP.id);
+                            return (
+                                <div key={netP.id} style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div>
+                                        <div style={{ fontSize: '0.875rem', fontWeight: 500 }}>{netP.name}</div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{netP.id}</div>
+                                    </div>
+                                    {isGranted ? (
+                                        <span className="status-badge verified" style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}>Granted</span>
+                                    ) : (
+                                        <button onClick={() => handleRequestAccess(netP)} className="btn-primary" style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}>Request Access</button>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
 
                 {/* My Patients */}
-                <div className="glass-panel" style={{ padding: '1.5rem' }}>
-                    <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem' }}>Permitted Patients</h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div className="glass-panel" style={{ padding: '1.5rem', maxHeight: '350px', overflowY: 'auto' }}>
+                    <h3 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Check size={18} color="var(--success)" /> Permitted Patients
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                         {patients.map(p => (
                             <div
                                 key={p.id}
-                                onClick={() => setActivePatient(p)}
                                 style={{
                                     padding: '1rem',
                                     borderRadius: 'var(--radius-md)',
-                                    background: activePatient?.id === p.id ? 'rgba(0, 242, 254, 0.1)' : 'transparent',
-                                    border: `1px solid ${activePatient?.id === p.id ? 'var(--primary-color)' : 'transparent'}`,
-                                    cursor: 'pointer',
-                                    transition: 'var(--transition-fast)'
+                                    background: activePatient?.id === p.id ? 'rgba(0, 242, 254, 0.1)' : 'rgba(255,255,255,0.03)',
+                                    border: `1px solid ${activePatient?.id === p.id ? 'var(--primary-color)' : 'rgba(255,255,255,0.05)'}`,
+                                    transition: 'var(--transition-fast)',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center'
                                 }}
                             >
-                                <div style={{ fontWeight: 500 }}>{p.name}</div>
-                                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.125rem' }}>ID: {p.id}</div>
+                                <div onClick={() => setActivePatient(p)} style={{ flex: 1, cursor: 'pointer' }}>
+                                    <div style={{ fontWeight: 600 }}>{p.name}</div>
+                                    <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>ID: {p.id}</div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    <label className="btn-secondary" style={{ fontSize: '0.75rem', padding: '0.5rem 0.75rem', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'width 0.3s ease' }} onClick={(e) => e.stopPropagation()}>
+                                        {uploadingFile === p.id ? `Sending... ${uploadProgress}%` : 'Send File'}
+                                        <input type="file" style={{ display: 'none' }} onChange={(e) => handleQuickUpload(e, p)} disabled={uploadingFile} />
+                                    </label>
+                                    <button onClick={() => setActivePatient(p)} className="btn-primary" style={{ fontSize: '0.75rem', padding: '0.5rem 0.75rem' }}>View</button>
+                                </div>
                             </div>
                         ))}
+                        {patients.length === 0 && (
+                            <div style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '1rem' }}>No approved patients yet.</div>
+                        )}
                     </div>
                 </div>
             </div>
 
-            {/* Right Content Area - Record Viewer */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            {/* Bottom Content Area - Record Viewer */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '1rem' }}>
 
                 {activePatient ? (
                     <>
-                        <div className="glass-panel" style={{ padding: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div className="glass-panel" style={{ padding: '2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'linear-gradient(90deg, rgba(0,0,0,0.6) 0%, rgba(0,242,254,0.05) 100%)', borderLeft: '4px solid var(--primary-color)' }}>
                             <div>
-                                <h1 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '0.25rem' }}>{activePatient.name}'s Records</h1>
-                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Decrypted using Patient-granted Session Key</div>
+                                <h1 style={{ fontSize: '1.75rem', fontWeight: 700, marginBottom: '0.5rem' }}>{activePatient.name}'s Records</h1>
+                                <div style={{ color: 'var(--text-secondary)', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <Unlock size={16} color="var(--success)" /> Decrypted using Patient-granted Session Key
+                                </div>
                             </div>
-                            <button onClick={() => setShowRecordModal(true)} className="btn-primary" style={{ fontSize: '0.875rem', padding: '0.5rem 1rem' }}>
-                                <FileText size={16} /> Append New Record
-                            </button>
+                            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                                <label className="btn-secondary" style={{ fontSize: '1rem', padding: '0.75rem 1.5rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: '220px', justifyContent: 'center' }}>
+                                    {uploadingFile === 'main' ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <span>Uploading {uploadProgress}%</span>
+                                            <div style={{ width: '40px', height: '4px', background: 'rgba(255,255,255,0.2)', borderRadius: '2px', overflow: 'hidden' }}>
+                                                <div style={{ width: `${uploadProgress}%`, height: '100%', background: 'var(--primary-color)', transition: 'width 0.1s linear' }} />
+                                            </div>
+                                        </div>
+                                    ) : 'Upload File to Share'}
+                                    <input type="file" style={{ display: 'none' }} onChange={handleFileUpload} disabled={uploadingFile} />
+                                </label>
+                                <button onClick={() => setShowRecordModal(true)} className="btn-primary" style={{ fontSize: '1rem', padding: '0.75rem 1.5rem' }}>
+                                    <FileText size={18} /> Append New Record
+                                </button>
+                            </div>
                         </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '1.5rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
                             {activePatient.status === 'granted' ? (
                                 patientRecords.length > 0 ? (
                                     patientRecords.map(r => (
                                         <div key={r.id} className="glass-panel" style={{ padding: '2rem' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
                                                 <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
-                                                    <div style={{ background: 'rgba(0, 242, 254, 0.1)', padding: '0.75rem', borderRadius: 'var(--radius-md)' }}>
-                                                        <Unlock size={24} color="var(--primary-color)" />
+                                                    <div style={{ background: 'rgba(0, 242, 254, 0.1)', padding: '1rem', borderRadius: 'var(--radius-md)' }}>
+                                                        <Unlock size={28} color="var(--primary-color)" />
                                                     </div>
                                                     <div>
                                                         <h3 style={{ fontSize: '1.125rem', fontWeight: 600, marginBottom: '0.25rem' }}>{r.type}</h3>
@@ -238,6 +457,11 @@ export default function DoctorDashboard() {
                                             <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1.5rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.05)', marginTop: '1rem' }}>
                                                 <div style={{ fontWeight: 500, marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Decrypted Contents:</div>
                                                 <div style={{ lineHeight: 1.6 }}>{r.details || "No details available."}</div>
+                                                {r.fileUrl && (
+                                                    <div style={{ marginTop: '1rem' }}>
+                                                        <a href={r.fileUrl} target="_blank" rel="noreferrer" className="btn-secondary" style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>View Shared File</a>
+                                                    </div>
+                                                )}
                                             </div>
 
                                             <div style={{ background: 'rgba(16, 185, 129, 0.05)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(16, 185, 129, 0.2)', marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', color: 'var(--success)' }}>
@@ -266,10 +490,10 @@ export default function DoctorDashboard() {
                         </div>
                     </>
                 ) : (
-                    <div className="glass-panel" style={{ padding: '4rem 2rem', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-                        <Search size={48} color="var(--border-color)" style={{ marginBottom: '1.5rem' }} />
-                        <h2 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '0.5rem' }}>Select a Patient</h2>
-                        <p style={{ color: 'var(--text-secondary)', maxWidth: '400px' }}>Search the network for a patient ID or select an approved patient from your list to view decrypted medical records.</p>
+                    <div className="glass-panel" style={{ padding: '6rem 2rem', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                        <Search size={64} color="var(--border-color)" style={{ marginBottom: '1.5rem' }} />
+                        <h2 style={{ fontSize: '1.75rem', fontWeight: 600, marginBottom: '0.75rem' }}>Select a Patient Record</h2>
+                        <p style={{ color: 'var(--text-secondary)', maxWidth: '500px', fontSize: '1.125rem' }}>Search the network for a patient ID or select an approved patient from your top directories to remotely view decrypted medical history and transfer files.</p>
                     </div>
                 )}
 

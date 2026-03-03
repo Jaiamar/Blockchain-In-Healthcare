@@ -81,7 +81,13 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      return userCredential.user;
+      // Fetch user profile from Firestore to get their actual role
+      const userDocRef = doc(db, 'users', userCredential.user.uid);
+      const userDocSnap = await getDoc(userDocRef);
+      if (userDocSnap.exists()) {
+        return userDocSnap.data();
+      }
+      return { role: 'patient' }; // Fallback
     } catch (error) {
       console.error("Login error:", error);
       throw error;
